@@ -29,6 +29,7 @@ typeset -i VERBOSE=0
 readonly PATH=/bin:/usr/bin:/sbin:/usr/sbin
 readonly bn="$(basename "$0")"
 readonly BIN_REQUIRED="curl jq"
+readonly TOKEN_CONFIGFILE="$HOME/.gitlab-remove-old-pipeline-token"
 # CONSTANTS END
 
 ########################################################################
@@ -47,6 +48,9 @@ function main(){
   local -i pages=0 page=0 pipeline_pages=0 pipeline_page=0 count_pipeline=0 count_pipeline_page=1 keep_pipelines_mod100=0
   local project_id project_namespace
   local pipeline_id pipe_source pipe_date
+
+  # Check API Access
+  curl --fail --show-error -s --head -H "PRIVATE-TOKEN: $GITLAB_TOKEN" "$GITLAB_URL/api/v4${GITLAB_GROUP}/projects" > /dev/null
 
   # Get total number of pages, 100 projects per page
   pages=$(curl -s --head -H "PRIVATE-TOKEN: $GITLAB_TOKEN" "$GITLAB_URL/api/v4${GITLAB_GROUP}/projects?${SELECT_ARCHIVED_PROJECT}&include_subgroups=true&per_page=100" | awk '/x-total-pages:/ {printf "%i", $2}')
@@ -68,7 +72,7 @@ function main(){
         while IFS=';' read -r pipeline_id pipe_source pipe_status pipe_date; do
           (( VERBOSE > 1 )) && echo -ne "\r\033[2K$pipeline_id, $pipe_source, $pipe_status, $pipe_date" 
           if (( count_pipeline > KEEP_PIPELINES )) ; then
-            curl -H "PRIVATE-TOKEN: $GITLAB_TOKEN" --request "DELETE" "$GITLAB_URL/api/v4/projects/$project_id/pipelines/$pipeline_id"
+            curl -s -H "PRIVATE-TOKEN: $GITLAB_TOKEN" --request "DELETE" "$GITLAB_URL/api/v4/projects/$project_id/pipelines/$pipeline_id"
             (( VERBOSE > 1 )) && echo -n " - deleted"
             (( VERBOSE > 2 )) && echo
           else
@@ -76,7 +80,7 @@ function main(){
             (( VERBOSE > 1 )) && echo -n " - skipped"
             (( VERBOSE > 2 )) && echo
           fi
-        done < <(curl -H "PRIVATE-TOKEN: $GITLAB_TOKEN" "$GITLAB_URL/api/v4/projects/$project_id/pipelines?per_page=100&page=$count_pipeline_page&sort=desc${PIPELINE_SOURCE}${PIPELINE_STATUS}${PIPELINE_DELETE_BEFORE}" 2> /dev/null | jq -j '.[] | .id, ";", .source, ";", .status, ";", .updated_at, "\n"')
+        done < <(curl -s -H "PRIVATE-TOKEN: $GITLAB_TOKEN" "$GITLAB_URL/api/v4/projects/$project_id/pipelines?per_page=100&page=$count_pipeline_page&sort=desc${PIPELINE_SOURCE}${PIPELINE_STATUS}${PIPELINE_DELETE_BEFORE}" 2> /dev/null | jq -j '.[] | .id, ";", .source, ";", .status, ";", .updated_at, "\n"')
       done
       if (( ARCHIVE_PROJECT == 1 )); then
         curl -s -H "PRIVATE-TOKEN: $GITLAB_TOKEN" --request "POST" "$GITLAB_URL/api/v4/projects/$project_id/archive" >/dev/null
@@ -139,8 +143,15 @@ usage() {
     -N, --keep-pipelines   keep last N pipeline
     -v, --verbose          Verbose mode, more -v flags bring more details
     -h, --help             print help
+
+     Gitlab url and token can be assigned in the environment variables: GITLAB_URL and GITLAB_TOKEN
+     Gitlab token can be get from file $TOKEN_CONFIGFILE
 "
 }
+
+# Read gitlab token from key file
+[ -f "$TOKEN_CONFIGFILE" ] && GITLAB_TOKEN="$(cat "$TOKEN_CONFIGFILE" | tr -d '\n')"
+
 # Getopts
 getopt -T; (( $? == 4 )) || { echo "incompatible getopt version" >&2; exit 4; }
 
